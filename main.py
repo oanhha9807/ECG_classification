@@ -345,7 +345,7 @@ class RNN_att(nn.Module):
 
         # self.rnn = nn.LSTM(input_size, hidden_size, num_layers, dropout=0, batch_first=True, bidirectional=bidirectional)  # batch_first: first dimension is the batch size
         self.rnn = nn.LSTM(1, 32, 2, dropout=0, batch_first=True, bidirectional=True)
-        self.rnn1 = nn.LSTM(192, 128, 2, dropout=0, batch_first=True, bidirectional=True)
+        # self.rnn1 = nn.LSTM(192, 128, 2, dropout=0, batch_first=True, bidirectional=True)
         # self.rnn2 = nn.LSTM(hidden_size*2, hidden_size, num_layers, dropout=dropout_rate, batch_first=True,
         #                    bidirectional=bidirectional)  # batch_first: first dimension is the batch size
         self.conv11 = nn.Conv1d(1000, 1000, kernel_size=3, padding= 1)
@@ -355,10 +355,10 @@ class RNN_att(nn.Module):
             self.d = 1
 
         # Initialize the attention layer
-        self.attention = Attention(256, batch_first=True)
+        self.attention = Attention(192, batch_first=True)
 
         # Adjust the input dimension for the classification layer according to bidirectionality
-        self.fc = nn.Linear(256, n_classes)
+        self.fc = nn.Linear(192, n_classes)
         num_classes = 4
         embedding_dim = 64
 
@@ -389,15 +389,21 @@ class RNN_att(nn.Module):
             # print(out_rnn.shape)#128, 1000, 192
             # print(label_embeddings.shape)#128, 1x192
             label_embeddings = label_embeddings[:, None, :]
-            elementwise_product = out_rnn * label_embeddings
-            f_norm = torch.norm(out_rnn, dim=1, keepdim=True)  # Norm for each row in f (1000, 1)
-            e_norm = torch.norm(label_embeddings)  # Single scalar norm for e
-            fused_feature = F.relu(elementwise_product / (f_norm * e_norm))
-            out_rnn = self.conv11(fused_feature) + out_rnn
+            features_normalized = F.normalize(out_rnn, p=2, dim=-1)  # Normalize last dimension
+            label_embedding_normalized = F.normalize(label_embeddings, p=2, dim=-1)  # Normalize last dimension
+            correlation = F.relu(torch.matmul(features_normalized, label_embedding_normalized.transpose(-1, -2)))
+            # print(correlation.shape)
+            # elementwise_product = out_rnn * label_embeddings
+            # print(elementwise_product.shape)
+            # a
+            # f_norm = torch.norm(out_rnn, dim=1, keepdim=True)  # Norm for each row in f (1000, 1)
+            # e_norm = torch.norm(label_embeddings)  # Single scalar norm for e
+            # fused_feature = F.relu(correlation / (features_normalized * label_embedding_normalized))
+            out_rnn = self.conv11(correlation) + out_rnn
         # tmp = torch.cat((out_rnn, label_embeddings), dim=1)
-        tmp, _ = self.rnn1(out_rnn)
+        # tmp, _ = self.rnn1(out_rnn)
         # print(tmp.shape)
-        attn_output, attn_weights = self.attention(tmp)
+        attn_output, attn_weights = self.attention(out_rnn)
 
         # Multi-label predictions
 
