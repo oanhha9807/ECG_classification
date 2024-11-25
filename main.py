@@ -1,5 +1,7 @@
 # Code based on the source code of homework 1 and homework 2 of the
 # deep structured learning code https://fenix.tecnico.ulisboa.pt/disciplinas/AEProf/2021-2022/1-semestre/homeworks
+# from tensorflow.python.keras.utils.version_utils import training
+# from tensorflow.python.keras.utils.version_utils import training
 from tqdm import tqdm
 import argparse
 import torch
@@ -365,7 +367,9 @@ class RNN_att(nn.Module):
         self.classifier = nn.Linear(embedding_dim, num_classes)  # Dự đoán các lớp
 
 
-    def forward(self, X, label_vectors):
+    def forward(self, X, label_vectors, training):
+        # print(label_vectors)
+
 
         list_f = []
         for i in range(3):
@@ -380,17 +384,18 @@ class RNN_att(nn.Module):
         out_rnn = torch.cat(list_f, dim=2)
         # print(out_rnn.shape)
         # attn_output shape: (batch_size, hidden_size*d)
-        label_embeddings = self.label_gcn(label_vectors)
-        # print(out_rnn.shape)#128, 1000, 192
-        # print(label_embeddings.shape)#128, 1x192
-        label_embeddings = label_embeddings[:, None, :]
-        elementwise_product = out_rnn * label_embeddings
-        f_norm = torch.norm(out_rnn, dim=1, keepdim=True)  # Norm for each row in f (1000, 1)
-        e_norm = torch.norm(label_embeddings)  # Single scalar norm for e
-        fused_feature = F.relu(elementwise_product / (f_norm * e_norm))
-        fused_feature = self.conv11(fused_feature) + out_rnn
+        if training:
+            label_embeddings = self.label_gcn(label_vectors)
+            # print(out_rnn.shape)#128, 1000, 192
+            # print(label_embeddings.shape)#128, 1x192
+            label_embeddings = label_embeddings[:, None, :]
+            elementwise_product = out_rnn * label_embeddings
+            f_norm = torch.norm(out_rnn, dim=1, keepdim=True)  # Norm for each row in f (1000, 1)
+            e_norm = torch.norm(label_embeddings)  # Single scalar norm for e
+            fused_feature = F.relu(elementwise_product / (f_norm * e_norm))
+            out_rnn = self.conv11(fused_feature) + out_rnn
         # tmp = torch.cat((out_rnn, label_embeddings), dim=1)
-        tmp, _ = self.rnn1(fused_feature)
+        tmp, _ = self.rnn1(out_rnn)
         # print(tmp.shape)
         attn_output, attn_weights = self.attention(tmp)
 
@@ -425,7 +430,7 @@ def train_batch(X, y, model, optimizer, gpu_id=None, **kwargs):
     """
     X, y = X.to(gpu_id), y.to(gpu_id)
     optimizer.zero_grad()
-    out = model(X,y)
+    out = model(X,y, training=True)
 
     # loss = criterion(out, y)
     loss = sigmoid_focal_loss(out, y, alpha=0.5, gamma=1.0, reduction='mean')
@@ -443,7 +448,7 @@ def predict(model, X, y, thr):
     # edge_index, edge_weight = create_edge_index_and_weight(label_embeddings)
     # edge_index = edge_index.to(device)
     # edge_weight = edge_weight.to(device)
-    logits_ = model(x_batch, y_batch)
+    logits_ = model(x_batch, y_batch, training = False)
     # logits_ = model(X, y)  # (batch_size, n_classes)
     probabilities = torch.sigmoid(logits_).cpu()
 
@@ -519,7 +524,7 @@ def compute_loss(model, dataloader, gpu_id=None):
             # edge_index, edge_weight = create_edge_index_and_weight(label_embeddings)
             # edge_index = edge_index.to(device)
             # edge_weight = edge_weight.to(device)
-            y_pred = model(x_batch, y_batch)
+            y_pred = model(x_batch, y_batch,  training=False)
             # loss = criterion(y_pred, y_batch)
             loss = sigmoid_focal_loss(y_pred, y_batch, alpha=0.5, gamma=1.0, reduction='mean')
             val_losses.append(loss.item())
@@ -551,7 +556,7 @@ def threshold_optimization(model, dataloader, gpu_id=None):
             # edge_index = edge_index.to(device)
             # edge_weight = edge_weight.to(device)
 
-            logits_ = model(X, Y)  # (batch_size, n_classes)
+            logits_ = model(X, Y, training=False)  # (batch_size, n_classes)
             probabilities = torch.sigmoid(logits_).cpu()
             Y = np.array(Y.cpu())
             save_probs += [probabilities.numpy()]
