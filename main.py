@@ -24,7 +24,7 @@ import torch
 import torch.nn.functional as F
 from torchvision.ops import sigmoid_focal_loss
 
-
+import networkx as nx
 
 
 from torch_geometric.nn import GCNConv
@@ -37,153 +37,8 @@ from torch_geometric.data import Data
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # MLP Class to process multi-hot vector
 
+from torch_geometric.utils import from_networkx
 
-
-# Label Correlation Embedding (for learning label embedding space)
-class LabelEmbedding(nn.Module):
-    def __init__(self, num_labels, embedding_dim):
-        super(LabelEmbedding, self).__init__()
-        self.embedding = nn.Embedding( num_labels, embedding_dim)
-
-    def forward(self):
-        return self.embedding.weight  # Returns the embeddings for all labels
-
-
-# Cosine Similarity function
-def cosine_similarity(a, b):
-    return F.cosine_similarity(a, b, dim=1)
-
-
-# GCN Layer to propagate label correlations
-class GCNLayer(nn.Module):
-    def __init__(self, input_dim, output_dim):
-        super(GCNLayer, self).__init__()
-        self.conv = GCNConv(input_dim, output_dim)
-
-    def forward(self, x, edge_index):
-        return F.relu(self.conv(x, edge_index))
-
-
-
-
-def create_graph_from_correlation0(correlation_matrix, threshold=0.6):
-# def create_graph_from_correlation(correlation_matrix, threshold=0.5):
-    num_channels = correlation_matrix.shape[0]
-    edge_index = []
-    edge_attr = []
-
-
-    for i in range(num_channels):
-        for j in range(num_channels):
-
-            if i != j and (correlation_matrix[i, j] > threshold ):#best
-                value = sorted([i, j])
-                cosines = cosine(data[:, id_1], data[:, id_2])
-                edge_index.append(value)
-                # edge_attr.append([correlation_matrix[i, j]])
-
-
-    edge_index = np.asarray(edge_index)
-
-    edge_index = np.unique(edge_index, axis = 0)
-    tmp = edge_index
-
-    for idx in edge_index:
-        m, n = idx
-        edge_attr.append([correlation_matrix[m,n]])
-    edge_index = list(edge_index)
-    # edge_attr = np.asarray(edge_attr)
-    if tmp.shape[0] == 0:
-        edge_index.append([0,0])
-        edge_attr.append([0.0])
-    edge_index = np.asarray(edge_index)
-    edge_attr = np.asarray(edge_attr)
-    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-    edge_attr = torch.tensor(edge_attr, dtype=torch.float)
-    return edge_index, edge_attr
-
-
-
-def get_edge_index_and_weights_from_correlation(correlation_matrices, threshold=0.5):
-
-    batch_size = correlation_matrices.size(0)
-    num_labels = correlation_matrices.size(1)  # Should be 4 for your case
-
-    edge_indices_list = []
-    edge_weights_list = []
-
-    for i in range(batch_size):
-        # Get the current correlation matrix for the sample
-        correlation_matrix = correlation_matrices[i]
-        # print(correlation_matrix)
-
-        edge_indices, edge_weights =  create_graph_from_correlation0(correlation_matrix, threshold = 0.2)
-        # print( edge_indices, edge_weights)
-        # Store the edge indices and weights
-        edge_indices_list.append(edge_indices)
-        edge_weights_list.append(edge_weights)
-
-
-    edge_index = torch.cat(edge_indices_list, dim=1)
-    edge_weight = torch.cat(edge_weights_list, dim=0)
-    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().cuda()
-    edge_weight = torch.tensor(edge_weight, dtype=torch.float).cuda()
-
-    return edge_index, edge_weight
-
-
-def compute_correlation_matrix(batch_data):
-    """
-    Compute correlation matrix for each sample in the batch.
-
-    Args:
-        batch_data (torch.Tensor): Tensor of shape [B, 4], where B is batch size and 4 is label size.
-
-    Returns:
-        torch.Tensor: Tensor of shape [B, 4, 4], containing correlation matrices for each sample.
-    """
-    # Ensure input is a PyTorch tensor
-    if not isinstance(batch_data, torch.Tensor):
-        batch_data = torch.tensor(batch_data, dtype=torch.float32)
-
-    # Normalize each vector to compute cosine similarity
-    norms = torch.norm(batch_data, dim=1, keepdim=True) + 1e-8
-    normalized_batch = batch_data / norms
-
-    # Compute outer product for each sample
-    batch_size, num_labels = batch_data.size()
-    correlation_matrices = torch.zeros(batch_size, num_labels, num_labels)
-
-    for i in range(batch_size):
-        sample = normalized_batch[i].view(-1, 1)  # [4, 1]
-        correlation_matrices[i] = torch.mm(sample, sample.T)  # [4, 4]
-
-    return correlation_matrices
-
-
-class LabelCorrelationGCN(nn.Module):
-    def __init__(self, num_labels, embedding_dim):
-        super(LabelCorrelationGCN, self).__init__()
-        self.gcn1 = GCNConv(num_labels, embedding_dim)
-        self.gcn2 = GCNConv(embedding_dim, embedding_dim)
-
-    def forward(self, label_vectors):
-        # print(label_vectors.shape)
-        # Calculate cosine similarity matrix
-        correlation_matrices = compute_correlation_matrix(label_vectors)
-
-
-        edge_index, edge_weight = get_edge_index_and_weights_from_correlation(correlation_matrices)
-
-        # Apply GCN layers
-        print(edge_index.shape, edge_weight.shape)
-        edge_index = torch.permute(edge_index, (1, 0))
-
-        x = self.gcn1(label_vectors, edge_index=edge_index, edge_weight = edge_weight)
-        x = F.relu(x)
-        x = self.gcn2(x, edge_index=edge_index, edge_weight = edge_weight)
-        # print(x.shape)
-        return x
 
 
 class Attention(nn.Module):
@@ -258,41 +113,74 @@ def correlation_loss(predicted_similarity, target_correlation):
     """
     return F.mse_loss(predicted_similarity, target_correlation)
 # Định nghĩa GCN để học mối quan hệ giữa các lớp
+from torch_geometric.nn import GCNConv
+
+# Define a simple GCN model
+class GCNModel(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(GCNModel, self).__init__()
+        self.conv1 = GCNConv(input_dim, hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, output_dim)
+
+    def forward(self, data):
+        x, edge_index = data.x, data.edge_index.to(device)
+        # print(x.shape)
+        # print(edge_index.shape)
+        x = F.relu(self.conv1(x, edge_index))
+        x = self.conv2(x, edge_index)
+        return x
+
+
 class LabelGCN(nn.Module):
     def __init__(self, num_classes, embedding_dim, hidden_dim):
         super(LabelGCN, self).__init__()
-        self.embedding = nn.Embedding(num_classes, embedding_dim)  # Ánh xạ nhãn thành embedding
+        # self.embedding = nn.Embedding(num_classes, embedding_dim)  # Ánh xạ nhãn thành embedding
         self.mlp = LabelEmbeddingMLP(4, hidden_dim)  # MLP để học nhúng từ multi-hot vector
-        self.gcn = GCNConv(4, embedding_dim)  # Áp dụng GCN để học mối quan hệ
+        self.gcn = GCNModel(hidden_dim,  hidden_dim=32, output_dim=4)  # Áp dụng GCN để học mối quan hệ
 
     def forward(self, x):
         # Áp dụng MLP để học embedding cho các labels
-        # compute co_occurrence_counts and occurrence_counts
-
-        co_occurrence_counts = torch.mm(x.T, x)
-        occurrence_counts = x.sum(dim=0)
-        # Step 1: Build and reweight correlation matrix
-        correlation_matrix = compute_correlation_matrix(co_occurrence_counts, occurrence_counts)
-        reweighted_matrix = reweight_correlation_matrix(correlation_matrix, threshold=0.1, rescale_param=1.0)
-        # print(correlation_matrix.shape)
-        # print(correlation_matrix.shape)
-        # Step 2: Convert to PyTorch tensor
-        target_correlation = torch.tensor(reweighted_matrix, dtype=torch.float32)
         embeddings = self.mlp(x)
         # print(embeddings.shape)
-        predicted_similarity = compute_cosine_similarity(embeddings)
+        similarity_matrix = F.cosine_similarity(
+            x.unsqueeze(2),  # Shape: (128, 4, 1, 128)
+            x.unsqueeze(1),  # Shape: (128, 1, 4, 128)
+            dim=-1  # Compare along the embedding dimension
+        )  # Output shape: (128, 4, 4)
+
+        # Create a graph from the similarity matrix
+        graph = nx.Graph()
+        for k in range(similarity_matrix.shape[0]):
+            for i in range(4):
+                for j in range(i + 1, 4):  # Avoid self-loops and duplicate edges
+                    # print(similarity_matrix[k][i, j])
+                    if similarity_matrix[k][i, j] > 0.5:
+                        graph.add_edge(i, j, weight=similarity_matrix[k][i, j].item())
+        data = from_networkx(graph)
+        data.x = embeddings
+        # print(data)
+        # print(embeddings.shape)
+        output = self.gcn(data)
+        # print(output.shape)
+        # print(embeddings.shape)
+        # predicted_similarity = compute_cosine_similarity(embeddings)
         # print(predicted_similarity.shape, target_correlation.shape)
         # loss = correlation_loss(predicted_similarity, target_correlation)
         # print(loss)
 
         # label_embeddings = self.mlp(x)
         # # print(label_embeddings.shape)
-        # edge_index, edge_weight = create_edge_index_and_weight(label_embeddings)
+
+        # edge_index, edge_weight = create_edge_index_and_weight(embeddings)
+        # print(edge_index)
         #
         #
         # # Áp dụng GCN để học các mối quan hệ giữa các labels
-        # x = self.gcn(label_embeddings, edge_index, edge_weight)
-        return embeddings
+        # print(embeddings.shape)
+        # x = self.gcn(embeddings, edge_index, edge_weight)
+        # print(x.shape)
+        # a
+        return embeddings, output
 
 
 # Hàm tính toán cosine similarity giữa hai vector
@@ -344,54 +232,78 @@ class RNN_att(nn.Module):
         self.bidirectional = bidirectional
 
         # self.rnn = nn.LSTM(input_size, hidden_size, num_layers, dropout=0, batch_first=True, bidirectional=bidirectional)  # batch_first: first dimension is the batch size
-        self.rnn = nn.LSTM(1, 32, 2, dropout=0, batch_first=True, bidirectional=True)
-        # self.rnn1 = nn.LSTM(192, 128, 2, dropout=0, batch_first=True, bidirectional=True)
+        self.rnn = nn.LSTM(3, 64, 2, dropout=0, batch_first=True, bidirectional=True)
+        # self.rnn1 = nn.LSTM(192, 96, 2, dropout=0, batch_first=True, bidirectional=True)
         # self.rnn2 = nn.LSTM(hidden_size*2, hidden_size, num_layers, dropout=dropout_rate, batch_first=True,
         #                    bidirectional=bidirectional)  # batch_first: first dimension is the batch size
         self.conv11 = nn.Conv1d(1000, 1000, kernel_size=3, padding= 1)
+        self.l1 = nn.Conv1d(4, 128, kernel_size=3, padding= 1)
         if bidirectional:
             self.d = 2
         else:
             self.d = 1
 
         # Initialize the attention layer
-        self.attention = Attention(192, batch_first=True)
+        self.attention = Attention(128, batch_first=True)
 
         # Adjust the input dimension for the classification layer according to bidirectionality
-        self.fc = nn.Linear(192, n_classes)
-        num_classes = 4
+        self.fc = nn.Linear(128, n_classes)
+        # num_classes = 4
         embedding_dim = 64
-
-        hidden_dim = 64
-        self.label_gcn = LabelGCN(4, embedding_dim, 192)
-        self.classifier = nn.Linear(embedding_dim, num_classes)  # Dự đoán các lớp
+        #
+        hidden_dim = 128
+        self.label_gcn = LabelGCN(n_classes, embedding_dim, hidden_dim)
+        self.linear2 = nn.Linear(128,4)
+        # self.classifier = nn.Linear(embedding_dim, num_classes)  # Dự đoán các lớp
 
 
     def forward(self, X, label_vectors, training):
-        # print(label_vectors)
+
+        # print(X.shape)
+        # print(label_vectors.shape)
 
 
-        list_f = []
-        for i in range(3):
-            X_tmp = X[:,:,i:i+1]
-            # print(X_tmp.shape)
-            # print(X.shape)
-            out_rnn, _ = self.rnn(X_tmp)
-            # out_rnn, _ = self.rnn2(out_rnn)
-            list_f.append(out_rnn)
-            # print(out_rnn.shape)
-        # print(list_f.shape)
-        out_rnn = torch.cat(list_f, dim=2)
+
+        # list_f = []
+        # for i in range(3):
+        #     X_tmp = X[:,:,i:i+1]
+        #     # X_tmp1 = self.conv11(X_tmp)
+        #     # print(X_tmp.shape)
+        #     # print(X.shape)
+        #     out_rnn, _ = self.rnn(X_tmp)
+        #     # out_rnn, _ = self.rnn2(out_rnn)
+        #     # out_rnn = torch.cat((out_rnn,X_tmp1) , dim=2)
+        #     # out_rnn = out_rnn + X_tmp1
+        #     list_f.append(out_rnn)
+        #     # print(out_rnn.shape)
+        # # print(list_f.shape)
+        # out_rnn = torch.cat(list_f, dim=2)
         # print(out_rnn.shape)
         # attn_output shape: (batch_size, hidden_size*d)
+        out_rnn, _ = self.rnn(X)
         if training:
-            label_embeddings = self.label_gcn(label_vectors)
+            label_embeddings, S = self.label_gcn(label_vectors)
+
             # print(out_rnn.shape)#128, 1000, 192
             # print(label_embeddings.shape)#128, 1x192
-            label_embeddings = label_embeddings[:, None, :]
-            features_normalized = F.normalize(out_rnn, p=2, dim=-1)  # Normalize last dimension
-            label_embedding_normalized = F.normalize(label_embeddings, p=2, dim=-1)  # Normalize last dimension
-            correlation = F.relu(torch.matmul(features_normalized, label_embedding_normalized.transpose(-1, -2)))
+            # label_embeddings = label_embeddings[:, None, :]
+            # features_normalized = F.normalize(out_rnn, p=2, dim=-1)  # Normalize last dimension
+            # print(features_normalized.shape)
+            # label_embedding_normalized = F.normalize(label_embeddings, p=2, dim=-1)  # Normalize last dimension
+            # print(label_embedding_normalized.shape)
+            cosine_simi = F.relu(torch.matmul(out_rnn, label_embeddings.transpose(-1, -2)))
+            # cosine_simi = torch.permute(cosine_simi, (0,2,1))
+
+            # print(cosine_simi.shape)
+            label_embeddings = F.relu(self.linear2(label_embeddings))
+
+            # S = torch.matmul(label_embeddings.transpose(-1, -2), label_embeddings)
+            # print(S[0])
+            # a
+
+            # print(correlation.shape)
+            # print(out_rnn.shape)
+            # a
             # print(correlation.shape)
             # elementwise_product = out_rnn * label_embeddings
             # print(elementwise_product.shape)
@@ -399,10 +311,20 @@ class RNN_att(nn.Module):
             # f_norm = torch.norm(out_rnn, dim=1, keepdim=True)  # Norm for each row in f (1000, 1)
             # e_norm = torch.norm(label_embeddings)  # Single scalar norm for e
             # fused_feature = F.relu(correlation / (features_normalized * label_embedding_normalized))
-            out_rnn = self.conv11(correlation) + out_rnn
-        # tmp = torch.cat((out_rnn, label_embeddings), dim=1)
+            correlation = self.conv11(cosine_simi)
+
+            correlation = correlation.repeat(1, 1, 32)
+            # print(self.conv11(correlation).shape)
+            out_rnn = correlation + out_rnn
+            # out_rnn = torch.cat((out_rnn1, out_rnn), dim=2)AQ
+
+            # print()
+        # tmp = torch.cat((out_rnn, X), dim=2)
         # tmp, _ = self.rnn1(out_rnn)
         # print(tmp.shape)
+        # out_rnn, _ = self.rnn1(out_rnn)
+
+
         attn_output, attn_weights = self.attention(out_rnn)
 
         # Multi-label predictions
@@ -412,21 +334,23 @@ class RNN_att(nn.Module):
         # print(logits)
         # out_fc shape: (batch_size, n_classes)
         # print(logits.shape)
+        if training:
+            return logits, S
+        else:
+            return logits
 
-        return logits
 
-
-    def label_loss(self, preds, labels, cosine_sim):
-        # Binary Cross Entropy Loss for multi-label classification
-        bce_loss = F.binary_cross_entropy_with_logits(preds, labels)
-
-        # Cosine Similarity Loss (penalize less similar labels)
-        cosine_loss = torch.mean(1 - cosine_sim)  # Maximizing similarity
-
-        # Final loss combining BCE and cosine similarity loss
-        total_loss = bce_loss + self.lambda_cosine * cosine_loss
-        return total_loss
-def train_batch(X, y, model, optimizer, gpu_id=None, **kwargs):
+    # def label_loss(self, preds, labels, cosine_sim):
+    #     # Binary Cross Entropy Loss for multi-label classification
+    #     bce_loss = F.binary_cross_entropy_with_logits(preds, labels)
+    #
+    #     # Cosine Similarity Loss (penalize less similar labels)
+    #     cosine_loss = torch.mean(1 - cosine_sim)  # Maximizing similarity
+    #
+    #     # Final loss combining BCE and cosine similarity loss
+    #     total_loss = bce_loss + self.lambda_cosine * cosine_loss
+    #     return total_loss
+def train_batch(Xs, ys, model, optimizer, gpu_id=None, **kwargs):
     """
     X (batch_size, 1000, 3): batch of examples
     y (batch_size, 4): ground truth labels_train
@@ -434,12 +358,18 @@ def train_batch(X, y, model, optimizer, gpu_id=None, **kwargs):
     optimizer: optimizer for the gradient step
     criterion: loss function
     """
-    X, y = X.to(gpu_id), y.to(gpu_id)
+    loss1 = nn.MSELoss()
+    X = Xs[0].to(device)
+    y = Xs[1].to(device)
+    # print(X.shape)
+    A = ys.to(device)
     optimizer.zero_grad()
-    out = model(X,y, training=True)
+    out, S = model(X,A, training=True)
+
+    loss1 = loss1(S, A)
 
     # loss = criterion(out, y)
-    loss = sigmoid_focal_loss(out, y, alpha=0.5, gamma=1.0, reduction='mean')
+    loss = sigmoid_focal_loss(out, y, alpha=0.5, gamma=1.0, reduction='mean') + loss1*0.005
     loss.backward()
     optimizer.step()
     return loss.item()
@@ -583,7 +513,28 @@ def threshold_optimization(model, dataloader, gpu_id=None):
         threshold_opt[dis] = round(thresholds[index], ndigits=2)
 
     return threshold_opt
+def matrix_corre(y_train):
+    print(y_train.shape)
+    print(y_train)
+    all = []
+    for k in range(len(y_train)):
+        # print(y_train)
+        co_occurrence_matrix = np.outer(y_train[k], y_train[k])  # Shape: (4, 4)
 
+        # Step 2: Calculate marginal counts (sum over each row)
+        marginal_counts = co_occurrence_matrix.sum(axis=1, keepdims=True)  # Shape: (4, 1)
+
+        # Step 3: Avoid division by zero (replace 0 counts with 1 temporarily)
+        safe_marginal_counts = np.where(marginal_counts == 0, 1, marginal_counts)
+
+        # Step 4: Compute conditional probability matrix
+        conditional_prob_matrix = co_occurrence_matrix / safe_marginal_counts  # Broadcasting
+        all.append(conditional_prob_matrix)
+
+
+    all = np.asarray(all)
+    # print(correlation_matrix)
+    return all
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-data',  default='/data/oanh/Bio/RNN_data/',
@@ -617,7 +568,19 @@ def main():
     dev_dataset = Dataset_for_RNN(opt.data, samples, 'dev')
     test_dataset = Dataset_for_RNN(opt.data, samples, 'test')
 
-    train_dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True)
+    y_train = []
+    for k in range(len(train_dataset)):
+        # print(k, train_dataset[k][1])
+        y_train.append(np.asarray(train_dataset[k][1]))
+
+    y_train = np.asarray(y_train)
+    correlation_matrix_train = matrix_corre(y_train)
+
+    correlation_matrix_train = torch.tensor(correlation_matrix_train, dtype=torch.float32)
+
+    combined_data = list(zip(train_dataset, correlation_matrix_train))
+
+    train_dataloader = DataLoader(combined_data, batch_size=opt.batch_size, shuffle=True)
     dev_dataloader = DataLoader(dev_dataset, batch_size=opt.batch_size, shuffle=False)
     test_dataloader = DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False)
     dev_dataloader_thr = DataLoader(dev_dataset, batch_size=opt.batch_size, shuffle=False)
@@ -631,6 +594,8 @@ def main():
     model = RNN_att(input_size, hidden_size, num_layers, n_classes, dropout_rate=opt.dropout, gpu_id=opt.gpu_id,
                 bidirectional=opt.bidirectional)
     model = model.to(opt.gpu_id)
+
+
 
     # get an optimizer
     # optims = {
@@ -678,7 +643,8 @@ def main():
         print('Training epoch {}'.format(ii))
         print('Epoch-{0} lr: {1}'.format(ii, optimizer.param_groups[0]['lr']))
         for i, (X_batch, y_batch) in tqdm(enumerate(train_dataloader)):
-            y_batch = y_batch.to(device)
+
+
             # label_embeddings = mlp(y_batch)
             # edge_index, edge_weight = create_edge_index_and_weight(label_embeddings)
             # edge_index = edge_index.to(device)
