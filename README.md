@@ -124,14 +124,14 @@ python visualize.py --data ./processed --results ./results
 
 The project includes the following architectures:
 
-1. **Convolutional Neural Networks (CNNs):**
+1. **Convolutional Neural Networks (ViT):**
    - For feature extraction and classification.
    
-2. **Recurrent Neural Networks (RNNs):**
+2. **Recurrent Neural Networks (LSTM):**
    - For capturing sequential dependencies in ECG signals.
 
 3. **Hybrid Models:**
-   - Combining CNN and RNN to leverage both feature extraction and temporal modeling.
+   - Combining ViT and LSTM to leverage both feature extraction and temporal modeling.
 
 ---
 
