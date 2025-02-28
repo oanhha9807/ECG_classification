@@ -52,7 +52,7 @@ pip install -r requirements.txt
 
 This project supports ECG datasets such as:
 
-- **PhysioNet MIT-BIH Arrhythmia Database**
+- **PhysioNet PTB-XL Database**
 - **PTB Diagnostic ECG Database**
 - Custom datasets in `.mat` or `.csv` format
 
