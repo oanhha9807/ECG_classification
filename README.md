@@ -1,4 +1,4 @@
-# ECG Classification
+# FusionNet
 
 This repository contains the code and resources for performing ECG (Electrocardiogram) classification. The project focuses on building a robust model to classify ECG signals into multiple diagnostic categories using advanced machine learning and deep learning techniques.
 
